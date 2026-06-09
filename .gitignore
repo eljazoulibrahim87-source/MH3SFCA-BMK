@@ -1,0 +1,29 @@
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Sorties régénérables (recalculées par l'app)
+outputs/
+
+# Environnements virtuels
+venv/
+env/
+.venv/
+
+# Éditeurs / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Fichiers temporaires
+*.log
+*.tmp
+streamlit.log
+
+# Dossier .claude (configuration agent)
+.claude/
