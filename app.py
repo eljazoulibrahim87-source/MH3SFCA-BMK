@@ -52,6 +52,51 @@ from simulation import (
 
 
 # ===========================================================================
+# Classification des variables affichées sur la carte
+# ===========================================================================
+
+# Tranches population (seuils choisis selon la distribution des communes BMK)
+BORNES_POPULATION = [0, 20_000, 40_000, 60_000, 80_000, float("inf")]
+LIBELLES_POPULATION = [
+    "< 20 000 hab.",
+    "20 000 – 40 000 hab.",
+    "40 000 – 60 000 hab.",
+    "60 000 – 80 000 hab.",
+    "> 80 000 hab.",
+]
+COULEURS_POPULATION = ["#fef0d9", "#fdcc8a", "#fc8d59", "#e34a33", "#b30000"]
+
+# Tranches nombre d'établissements accessibles
+BORNES_N_ETAB = [0, 5, 10, 15, 20, 25, float("inf")]
+LIBELLES_N_ETAB = [
+    "0 – 5 établissements",
+    "5 – 10",
+    "10 – 15",
+    "15 – 20",
+    "20 – 25",
+    "> 25",
+]
+COULEURS_N_ETAB = ["#ffffd9", "#c7e9b4", "#7fcdbb", "#41b6c4", "#1d91c0", "#225ea8"]
+
+
+def _config_variable(variable: str):
+    """Retourne (colonne, bornes, libelles, couleurs, titre) selon la variable.
+
+    Sert à rendre la carte choroplèthe ET la légende cohérentes quelle que
+    soit la variable affichée.
+    """
+    if variable == "SPAI×1000":
+        return ("spai_pour_mille", BORNES_CLASSES, LIBELLES_CLASSES,
+                COULEURS_CLASSES, "SPAI×1000 (lits / 1 000 hab.)")
+    if variable == "Population":
+        return ("Populati_1", BORNES_POPULATION, LIBELLES_POPULATION,
+                COULEURS_POPULATION, "Population (habitants)")
+    # "Nb étab. accessibles"
+    return ("n_etab_accessibles", BORNES_N_ETAB, LIBELLES_N_ETAB,
+            COULEURS_N_ETAB, "Établissements accessibles")
+
+
+# ===========================================================================
 # Configuration de la page
 # ===========================================================================
 
@@ -284,15 +329,18 @@ with tab_carte:
         com_df = com_df.merge(valeurs.drop(columns=["nom", "population"]),
                                 on="code_norm", how="left")
 
-        if variable == "SPAI×1000":
-            col_valeur = "spai_pour_mille"
-            unite = "lits / 1000 hab."
-        elif variable == "Nb étab. accessibles":
-            col_valeur = "n_etab_accessibles"
-            unite = "établissements"
-        else:
-            col_valeur = "Populati_1"
-            unite = "habitants"
+        # Configuration de la variable affichée (colonne + tranches + légende)
+        col_valeur, bornes_v, libelles_v, couleurs_v, titre_legende = \
+            _config_variable(variable)
+
+        def _couleur_pour(val):
+            """Détermine la couleur d'une commune selon la tranche de la variable."""
+            if pd.isna(val):
+                return "#cccccc"
+            for i in range(len(bornes_v) - 1):
+                if val < bornes_v[i + 1]:
+                    return couleurs_v[i]
+            return couleurs_v[-1]
 
         if choro:
             # Polygones (charge le shapefile)
@@ -302,27 +350,8 @@ with tab_carte:
             gdf = gdf.merge(valeurs.drop(columns=["nom", "population"]),
                               on="code_norm", how="left")
 
-            def _couleur(val):
-                if pd.isna(val):
-                    return "#cccccc"
-                if col_valeur == "spai_pour_mille":
-                    for i, borne_sup in enumerate(BORNES_CLASSES[1:]):
-                        if val < borne_sup:
-                            return COULEURS_CLASSES[i]
-                    return COULEURS_CLASSES[-1]
-                # Pour autres variables : gradient continu
-                vmin, vmax = gdf[col_valeur].min(), gdf[col_valeur].max()
-                if vmax > vmin:
-                    norm = (val - vmin) / (vmax - vmin)
-                else:
-                    norm = 0
-                from matplotlib import colormaps
-                cmap = colormaps["YlGnBu"]
-                rgba = cmap(norm)
-                return f"#{int(rgba[0]*255):02x}{int(rgba[1]*255):02x}{int(rgba[2]*255):02x}"
-
             for _, ligne in gdf.iterrows():
-                couleur = _couleur(ligne[col_valeur])
+                couleur = _couleur_pour(ligne[col_valeur])
                 popup = (
                     f"<b>{ligne['nom']}</b><br>"
                     f"Code : {ligne['Code_Commu']}<br>"
@@ -345,13 +374,7 @@ with tab_carte:
                 val = ligne[col_valeur]
                 if pd.isna(val):
                     continue
-                if col_valeur == "spai_pour_mille":
-                    couleur = COULEURS_CLASSES[
-                        max(0, min(len(COULEURS_CLASSES) - 1,
-                                   sum(val >= b for b in BORNES_CLASSES[1:])))
-                    ]
-                else:
-                    couleur = "#4575b4"
+                couleur = _couleur_pour(val)
                 rayon = 4 + (ligne["Populati_1"] / com_df["Populati_1"].max()) * 18
                 popup = (
                     f"<b>{ligne['nom']}</b><br>"
@@ -419,16 +442,16 @@ with tab_carte:
                     icon=icone,
                 ).add_to(cible)
 
-        # Légende personnalisée
-        legende_html = """
+        # Légende personnalisée — dynamique selon la variable affichée
+        legende_html = f"""
         <div style="position: fixed; bottom: 30px; left: 30px; z-index: 9999;
                     background: white; padding: 10px 14px; border-radius: 8px;
                     box-shadow: 0 2px 8px rgba(0,0,0,.18); font-family: sans-serif;
                     font-size: 12px;">
-          <b>SPAI×1000 (lits / 1 000 hab.)</b><br>
+          <b>{titre_legende}</b><br>
           <div style="margin-top:6px;">
         """
-        for libelle, couleur in zip(LIBELLES_CLASSES, COULEURS_CLASSES):
+        for libelle, couleur in zip(libelles_v, couleurs_v):
             legende_html += (
                 f'<span style="display:inline-block;width:14px;height:14px;'
                 f'background:{couleur};border:1px solid #999;margin-right:6px;'
@@ -628,63 +651,333 @@ with tab_simulation:
 # ---------------------------------------------------------------------------
 
 with tab_methode:
-    st.markdown(r"""
-    ## La méthode MH3SFCA-λ
+    st.markdown("## La méthode MH3SFCA-λ")
+    st.markdown(
+        "**M**odified **H**uff **3**-**S**tep **F**loating **C**atchment **A**rea "
+        "avec coefficient de préférence sectorielle **λ**."
+    )
+    st.markdown(
+        "Cette méthode adapte les FCA (*Floating Catchment Area*) en intégrant "
+        "deux raffinements majeurs : "
+        "**(1)** le **modèle de Huff** qui pondère la probabilité que les "
+        "habitants d'une commune utilisent chaque établissement, et "
+        "**(2)** le **coefficient sectoriel λ** qui reflète la préférence des "
+        "habitants entre cliniques privées (~90 % des dépenses AMO au Maroc) "
+        "et hôpitaux publics (~10 %)."
+    )
 
-    **M**odified **H**uff **3**-**S**tep **F**loating **C**atchment **A**rea
-    avec coefficient de préférence sectorielle **λ**.
+    st.divider()
 
-    ### Étape 1 — Poids de Huff
-
-    Pour chaque paire (commune $i$, établissement $j$) :
-
-    $$ \text{Huff}_{ij} = \frac{\lambda_j \cdot S_j^{\alpha} \cdot e^{-d_{ij}^2/\beta}}
-        {\sum_k \lambda_k \cdot S_k^{\alpha} \cdot e^{-d_{ik}^2/\beta}} $$
-
-    Propriété : $\sum_j \text{Huff}_{ij} = 1$ (conservation de la demande).
-
-    ### Étape 2 — Ratio offre / demande pondéré
-
-    $$ R_j = \frac{\lambda_j \cdot S_j}{\sum_i \text{Huff}_{ij} \cdot P_i} $$
-
-    ### Étape 3 — Indice SPAI
-
-    $$ \text{SPAI}_i = \sum_j \text{Huff}_{ij} \cdot R_j \cdot e^{-d_{ij}^2/\beta} $$
-
-    L'indice est exprimé en **lits disponibles pour 1 000 habitants**
-    (×1000).
-
-    ---
-
-    ### Paramètres et signification
-
-    | Symbole | Valeur défaut | Rôle |
-    |---|---|---|
-    | $d_\max$ | 90 min | Seuil maximal de temps de trajet (médiane régionale BMK) |
-    | $\beta$ | 1758.89 | Friction spatiale (calibré sur $d_\max$, seuil 0.01) |
-    | $\alpha$ | 1.0 | Élasticité d'attractivité par rapport à la capacité |
-    | $\lambda_\text{privé}$ | 0.9 | 90 % des dépenses AMO vers le secteur privé |
-    | $\lambda_\text{public}$ | 0.1 | 10 % vers le secteur public |
-    | $S_j$ | nb lits | Capacité de l'établissement $j$ |
-    | $P_i$ | RGPH 2024 | Population de la commune $i$ |
-
-    ### Indicateurs d'équité
-
-    - **Coefficient de Gini** : mesure l'inégalité de distribution du SPAI
-      entre communes (0 = égalité, 1 = inégalité totale).
-    - **Courbe de Lorenz** : visualise l'écart à l'égalité parfaite.
-
-    ---
-
-    ### Sources
-
-    - **Données démographiques** : Haut-Commissariat au Plan, RGPH 2024.
-    - **Établissements de santé** : Carte Sanitaire 2025, MSPS.
-    - **Matrice OD** : OpenStreetMap + plugin OD QGIS.
-    - **Méthode** : Jörg et al. (2019) ; Subal et al. (2021).
-
-    ---
-
-    *Application développée dans le cadre du PFE de EL JAZOULI Brahim,
-    FSEG Béni Mellal.*
+    # =======================================================================
+    # ÉTAPE 1
+    # =======================================================================
+    st.markdown("### Étape 1 — Poids de Huff (probabilité d'utilisation)")
+    st.markdown(
+        r"Pour chaque paire (commune $i$, établissement $j$ accessible "
+        r"depuis $i$), on calcule la **probabilité** que les habitants de $i$ "
+        r"utilisent l'établissement $j$ parmi tous ceux à portée."
+    )
+    st.latex(r"""
+        \text{Huff}_{ij} \;=\;
+        \frac{\lambda_j \,\cdot\, S_j^{\,\alpha} \,\cdot\, e^{-d_{ij}^{\,2}/\beta}}
+             {\displaystyle\sum_{k\,:\,d_{ik}\,\le\,d_{\max}}
+              \lambda_k \,\cdot\, S_k^{\,\alpha} \,\cdot\, e^{-d_{ik}^{\,2}/\beta}}
     """)
+    st.markdown(
+        r"**Interprétation** — un établissement attire d'autant plus que :"
+    )
+    st.markdown(
+        r"""
+        - il est **gros** : $S_j$ élevé (nombre de lits)
+        - il est **proche** : friction $e^{-d_{ij}^{2}/\beta}$ proche de 1
+        - il est du **secteur préféré** : $\lambda_j$ élevé (privé ici)
+        """
+    )
+    st.markdown(r"**Propriété fondamentale** — conservation de la demande :")
+    st.latex(r"\sum_{j} \text{Huff}_{ij} \;=\; 1 \qquad \forall\, i")
+    st.caption(
+        "Chaque commune répartit l'intégralité de sa population entre les "
+        "établissements accessibles (au plus à dₘₐₓ minutes)."
+    )
+
+    st.divider()
+
+    # =======================================================================
+    # ÉTAPE 2
+    # =======================================================================
+    st.markdown("### Étape 2 — Ratio offre / demande pondéré")
+    st.markdown(
+        r"Pour chaque établissement $j$, on calcule le **nombre de lits "
+        r"effectivement disponibles par habitant qui le sollicite** (la "
+        r"demande étant pondérée par le poids de Huff de l'étape 1)."
+    )
+    st.latex(r"""
+        R_j \;=\; \frac{\lambda_j \,\cdot\, S_j}
+                       {\displaystyle\sum_{i\,:\,d_{ij}\,\le\,d_{\max}}
+                        \text{Huff}_{ij} \,\cdot\, P_i}
+    """)
+    st.markdown(
+        r"""
+        **Interprétation** — $R_j$ mesure la **rareté de l'offre** :
+        - $R_j$ **élevé** → établissement peu sollicité par rapport à ses capacités
+        - $R_j$ **faible** → établissement **saturé** (forte demande, peu de lits)
+
+        L'innovation de la méthode MH3SFCA-λ par rapport au modèle M3SFCA
+        classique tient à la pondération de l'offre par $\lambda_j$ au
+        numérateur : seule la fraction sectoriellement préférée est
+        comptabilisée comme "offre effective".
+        """
+    )
+
+    st.divider()
+
+    # =======================================================================
+    # ÉTAPE 3
+    # =======================================================================
+    st.markdown("### Étape 3 — Indice d'accessibilité SPAI")
+    st.markdown(
+        r"Pour chaque commune $i$, on **agrège** les ratios $R_j$ de tous "
+        r"les établissements accessibles, en les pondérant par le poids de "
+        r"Huff et la friction spatiale."
+    )
+    st.latex(r"""
+        \text{SPAI}_i \;=\;
+        \sum_{j\,:\,d_{ij}\,\le\,d_{\max}}
+        \text{Huff}_{ij} \,\cdot\, R_j \,\cdot\, e^{-d_{ij}^{\,2}/\beta}
+    """)
+    st.markdown(
+        r"""
+        **Interprétation** — SPAI mesure le nombre de **lits réellement
+        accessibles par habitant** de la commune $i$. La double pondération
+        (Huff + friction) garantit que :
+        - les **établissements proches** comptent davantage
+        - les **établissements préférés** (privé si λ_privé > λ_public) comptent davantage
+        - les **établissements saturés** ($R_j$ faible) sont sous-pondérés
+
+        L'indice est ensuite multiplié par **1 000** pour s'exprimer en
+        **lits disponibles pour 1 000 habitants**, l'unité conventionnelle
+        de la littérature en accessibilité aux soins (OMS, OCDE).
+        """
+    )
+
+    st.divider()
+
+    # =======================================================================
+    # PARAMÈTRES
+    # =======================================================================
+    st.markdown("### Paramètres du modèle")
+    st.markdown(
+        "Les paramètres sont modifiables dans la sidebar (◀ à gauche). "
+        "Voici leur signification et leur impact :"
+    )
+
+    with st.expander("📐  $d_{\\max}$  — Seuil de temps de trajet (90 min)"):
+        st.markdown(
+            r"""
+            **Rôle** — seuil maximal au-delà duquel un établissement est
+            considéré **inaccessible** depuis une commune. Toutes les paires
+            $(i, j)$ avec $d_{ij} > d_{\max}$ sont **exclues** des trois
+            étapes du calcul.
+
+            **Justification de la valeur 90 minutes** — médiane des temps de
+            trajet observés dans la région Béni Mellal-Khénifra (matrice
+            origine-destination calculée via OpenStreetMap et le plugin OD
+            de QGIS sur 4 760 paires commune × établissement).
+
+            **Sensibilité** :
+            """
+        )
+        st.markdown(
+            r"""
+            - $d_{\max}$ **plus petit** (ex : 60 min) → davantage de
+              **déserts médicaux** (communes isolées non rattachées à un
+              établissement)
+            - $d_{\max}$ **plus grand** (ex : 120 min) → SPAI plus **lissé**
+              géographiquement, mais hypothèse réaliste affaiblie
+            """
+        )
+
+    with st.expander("📉  $\\beta$  — Paramètre de friction spatiale (1758.89)"):
+        st.markdown(
+            r"""
+            **Rôle** — contrôle la **vitesse de décroissance** de
+            l'attractivité d'un établissement avec la distance. Apparaît
+            dans la fonction de friction gaussienne :
+            """
+        )
+        st.latex(r"f(d) \;=\; e^{-d^{2}/\beta}")
+        st.markdown(r"**Calibrage automatique** depuis $d_{\max}$ :")
+        st.latex(r"\beta \;=\; -\frac{d_{\max}^{\,2}}{\ln(\text{seuil})}")
+        st.markdown(
+            r"""
+            avec **seuil $= 0.01$**, c'est-à-dire que la friction au seuil
+            $d_{\max}$ vaut $f(d_{\max}) = 1\%$ (probabilité résiduelle
+            d'utilisation très faible). Cette calibration suit
+            **Jörg et al. (2019, p. 29)**.
+
+            **Sensibilité** :
+            """
+        )
+        st.markdown(
+            r"""
+            - $\beta$ **petit** → résistance **forte** aux longs trajets, les
+              habitants restent près de chez eux
+            - $\beta$ **grand** → effet de la distance **atténué**, la portée
+              des établissements s'étend
+            """
+        )
+
+    with st.expander("📈  $\\alpha$  — Élasticité d'attractivité (1.0)"):
+        st.markdown(
+            r"""
+            **Rôle** — élasticité de l'attractivité d'un établissement par
+            rapport à sa **capacité** (nombre de lits $S_j$). Apparaît à
+            l'étape 1 sous la forme $S_j^{\alpha}$.
+
+            **Justification de $\alpha = 1$** — attractivité **linéaire** :
+            doubler la capacité double l'attractivité. C'est la
+            recommandation originale de **Huff (1963)** pour les modèles
+            d'interaction spatiale.
+
+            **Sensibilité** :
+            """
+        )
+        st.markdown(
+            r"""
+            - $\alpha < 1$ : **concavité** — les très gros établissements
+              voient leur attractivité **relative** diminuer (rendements
+              décroissants de la taille)
+            - $\alpha > 1$ : **convexité** — les gros établissements
+              dominent (effet *winner-take-all*)
+            """
+        )
+
+    with st.expander("⚖️  $\\lambda_{\\text{privé}}$ et $\\lambda_{\\text{public}}$  — Coefficients de préférence sectorielle"):
+        st.markdown(
+            r"""
+            **Rôle** — poids sectoriels reflétant la **préférence
+            d'utilisation** des habitants entre secteur privé (cliniques) et
+            secteur public (hôpitaux). C'est l'**innovation majeure** de la
+            méthode MH3SFCA-λ par rapport au M3SFCA classique.
+
+            **Valeurs par défaut** :
+            """
+        )
+        st.latex(r"\lambda_{\text{privé}} = 0.9 \qquad \lambda_{\text{public}} = 0.1")
+        st.markdown(
+            r"""
+            **Justification empirique** — selon les rapports de la CNSS
+            (Caisse Nationale de Sécurité Sociale), **90 % des dépenses
+            de l'AMO** (Assurance Maladie Obligatoire) au Maroc sont
+            orientées vers le **secteur privé**. Les 10 % restants vont
+            au public.
+
+            **Effet dans le modèle** — $\lambda_j$ intervient :
+            1. À l'**étape 1** : multiplie l'attractivité (un établissement
+               privé attire 9 × plus qu'un public à capacité égale)
+            2. À l'**étape 2** : pondère l'offre effective $S_j$ comptée
+               dans le ratio $R_j$
+
+            **Sensibilité** :
+            """
+        )
+        st.markdown(
+            r"""
+            - $\lambda_{\text{privé}} = 1$, $\lambda_{\text{public}} = 0$ :
+              modèle **"tout privé"** (les hôpitaux publics sont ignorés)
+            - $\lambda_{\text{privé}} = 0.5$, $\lambda_{\text{public}} = 0.5$ :
+              **neutralité sectorielle** (revient au M3SFCA classique sans
+              préférence)
+            - $\lambda_{\text{privé}} = 0.1$, $\lambda_{\text{public}} = 0.9$ :
+              modèle **"tout public"** (renversement de la préférence)
+            """
+        )
+
+    with st.expander("👥  $P_i$ et $S_j$  — Demande et offre"):
+        st.markdown(
+            r"""
+            **$P_i$ — Population de la commune $i$** : nombre d'habitants
+            résidant dans la commune. Source : **RGPH 2024** (Recensement
+            Général de la Population et de l'Habitat), Haut-Commissariat
+            au Plan. Permet de ramener l'offre à la demande effective dans
+            l'étape 2.
+
+            **$S_j$ — Capacité de l'établissement $j$** : **nombre de lits**
+            disponibles. Source : **Carte Sanitaire 2025**, Ministère de la
+            Santé et de la Protection Sociale. C'est l'indicateur standard
+            utilisé dans les méthodes FCA en santé publique
+            (**Wang, 2012**), reflétant la capacité d'hospitalisation.
+            """
+        )
+
+    st.divider()
+
+    # =======================================================================
+    # INDICATEURS D'ÉQUITÉ
+    # =======================================================================
+    st.markdown("### Indicateurs d'équité spatiale")
+    st.markdown(
+        r"""
+        Au-delà du SPAI moyen, deux indicateurs synthétiques caractérisent
+        la **distribution** de l'accessibilité entre les 135 communes :
+
+        **Coefficient de Gini** — mesure l'inégalité spatiale du SPAI
+        (pondérée par la population) :
+        """
+    )
+    st.latex(r"G \;=\; 1 - 2 \int_{0}^{1} L(p)\, dp")
+    st.markdown(
+        r"""
+        où $L(p)$ est la courbe de Lorenz.
+        - $G = 0$ : **égalité parfaite** (toutes les communes ont le même SPAI)
+        - $G = 1$ : **inégalité maximale** (toute l'accessibilité concentrée
+          sur une seule commune)
+
+        **Courbe de Lorenz** — représentation graphique : axe $x$ = part
+        cumulée de population (triée par SPAI croissant), axe $y$ = part
+        cumulée du SPAI. Plus la courbe s'écarte de la diagonale,
+        plus l'inégalité est forte.
+        """
+    )
+
+    st.divider()
+
+    # =======================================================================
+    # SOURCES
+    # =======================================================================
+    st.markdown("### Sources des données")
+    st.markdown(
+        """
+        | Donnée | Source | Année |
+        |---|---|---|
+        | Population des communes | Haut-Commissariat au Plan (RGPH) | 2024 |
+        | Centroïdes communaux | Haut-Commissariat au Plan / QGIS | 2024 |
+        | Liste et capacité des établissements | Carte Sanitaire (MSPS) | 2025 |
+        | Coordonnées des établissements | Géolocalisation MSPS / OSM | 2025 |
+        | Matrice origine-destination (135 × 35) | OpenStreetMap + plugin OD QGIS | 2025 |
+        | Taux d'AMO et répartition sectorielle | CNSS, Rapport annuel | 2024 |
+        """
+    )
+
+    st.markdown("### Références bibliographiques")
+    st.markdown(
+        """
+        - **Huff, D. L. (1963)**. *A probabilistic analysis of shopping center
+          trade areas*. Land Economics, 39(1), 81–90.
+        - **Wang, F. (2012)**. *Measurement, optimization, and impact of
+          health care accessibility: a methodological review*. Annals of the
+          Association of American Geographers, 102(5), 1104–1112.
+        - **Jörg, R., Lenz, N., Wetz, S. & Widmer, M. (2019)**. *A modified
+          two-step floating catchment area method to incorporate
+          within-region attractiveness*.
+        - **Subal, J., Paal, P. & Krisp, J. M. (2021)**. *Quantifying spatial
+          accessibility of general practitioners by applying a modified Huff
+          three-step floating catchment area*.
+        """
+    )
+
+    st.caption(
+        "Application développée dans le cadre du Projet de Fin d'Études "
+        "de **EL JAZOULI Brahim**, Faculté des Sciences Économiques et de "
+        "Gestion, Béni Mellal."
+    )
