@@ -101,7 +101,7 @@ def _config_variable(variable: str):
 # ===========================================================================
 
 st.set_page_config(
-    page_title="MH3SFCA-λ • Béni Mellal-Khénifra",
+    page_title="Aménagement sanitaire • Béni Mellal-Khénifra",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -186,8 +186,8 @@ if "sites_simules" not in st.session_state:
 # ===========================================================================
 
 with st.sidebar:
-    st.markdown("## 🏥 MH3SFCA-λ")
-    st.caption("Accessibilité spatiale aux soins — Béni Mellal-Khénifra")
+    st.markdown("## 🏥 Aménagement sanitaire")
+    st.caption("Béni Mellal-Khénifra — Modèle MH3SFCA-λ")
     st.divider()
 
     st.markdown("### Paramètres du modèle")
@@ -270,7 +270,9 @@ col_logo, col_titre, col_status = st.columns([1, 5, 2])
 with col_logo:
     st.markdown("# 🏥")
 with col_titre:
-    st.markdown("## MH3SFCA-λ — Béni Mellal-Khénifra")
+    st.markdown("## Aide à la décision pour l'aménagement sanitaire")
+    st.markdown("**Béni Mellal-Khénifra** &nbsp;—&nbsp; *Modèle MH3SFCA-λ*",
+                 unsafe_allow_html=True)
     st.caption(f"dₘₐₓ = {params_courants.d_max:.0f} min  •  "
                 f"β = {params_courants.beta:.1f}  •  "
                 f"α = {params_courants.alpha:.2f}  •  "
