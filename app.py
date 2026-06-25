@@ -10,6 +10,7 @@ Sidebar  : paramètres du modèle + bouton de recalcul.
 
 from __future__ import annotations
 
+import base64
 import io
 import sys
 from pathlib import Path
@@ -132,17 +133,130 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-CSS = """
+# Filigrane thématique pour le bandeau d'en-tête : pin de carte, croix
+# médicale, rose des vents, ECG — en blanc semi-transparent sur le gradient.
+_SVG_BANDEAU = """<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'>
+<g fill='white' fill-opacity='0.5'>
+<g transform='translate(14, 12)'><path d='M12 0 C5.4 0 0 5.4 0 12 C0 22 12 38 12 38 C12 38 24 22 24 12 C24 5.4 18.6 0 12 0 Z'/><circle cx='12' cy='12' r='4' fill='white' fill-opacity='1'/></g>
+<g transform='translate(116, 22)'><rect x='7' y='0' width='6' height='22' rx='1'/><rect x='0' y='8' width='22' height='6' rx='1'/></g>
+</g>
+<g transform='translate(102, 102)' fill='none' stroke='white' stroke-opacity='0.45' stroke-width='1.2'>
+<circle cx='20' cy='20' r='18'/>
+<line x1='20' y1='3' x2='20' y2='37'/>
+<line x1='3' y1='20' x2='37' y2='20'/>
+<path d='M20 4 L24 20 L20 36 L16 20 Z' fill='white' fill-opacity='0.35'/>
+</g>
+<g stroke='white' stroke-opacity='0.42' stroke-width='1.5' fill='none' stroke-linejoin='round' stroke-linecap='round'>
+<path d='M2 128 L24 128 L31 113 L42 145 L52 103 L62 128 L86 128'/>
+</g>
+</svg>"""
+
+_BANDEAU_BG_URI = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(_SVG_BANDEAU.encode("utf-8")).decode("ascii")
+)
+
+CSS = f"""
 <style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
-    .stMetric { background: #f8f9fa; border-radius: 12px; padding: 14px 18px;
-                border-left: 5px solid #4575b4; }
-    div[data-testid="stMetricLabel"] > div { font-size: 0.75rem;
-                color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; }
-    div[data-testid="stMetricValue"] { font-size: 1.9rem; font-weight: 700; }
-    h1, h2, h3 { color: #1e3a5f; }
-    .badge-pareto { background: #d62728; color: white; padding: 2px 8px;
-                    border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+    /* === Bandeau d'en-tête vif === */
+    .bandeau-mh3sfca {{
+        position: relative;
+        background:
+            linear-gradient(rgba(20, 30, 60, 0.22), rgba(20, 30, 60, 0.22)),
+            linear-gradient(135deg,
+                #67000d 0%, #b30000 14%, #d73027 28%, #fc8d59 42%,
+                #fee08b 54%, #a6d96a 68%, #1a9850 84%, #006837 100%);
+        border-radius: 16px;
+        padding: 22px 30px 16px 30px;
+        margin-bottom: 18px;
+        color: white;
+        box-shadow: 0 6px 24px rgba(30, 58, 95, 0.20);
+        overflow: hidden;
+    }}
+    .bandeau-mh3sfca::before {{
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-image: url("{_BANDEAU_BG_URI}");
+        background-repeat: repeat;
+        opacity: 0.55;
+        pointer-events: none;
+    }}
+    .bandeau-contenu {{
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+    }}
+    .bandeau-titre {{
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        flex: 1;
+        min-width: 0;
+    }}
+    .bandeau-icone {{
+        font-size: 2.8rem;
+        line-height: 1;
+        filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+    }}
+    .bandeau-titre h1 {{
+        font-size: 1.65rem;
+        margin: 0;
+        color: white !important;
+        text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        line-height: 1.25;
+    }}
+    .bandeau-soustitre {{
+        margin: 4px 0 0 0;
+        font-size: 0.95rem;
+        color: white;
+        opacity: 0.95;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }}
+    .bandeau-badge {{
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 22px;
+        font-weight: 600;
+        font-size: 0.88rem;
+        background: rgba(255, 255, 255, 0.22);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        white-space: nowrap;
+        color: white;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    }}
+    .bandeau-params {{
+        position: relative;
+        z-index: 1;
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.28);
+        font-size: 0.82rem;
+        color: white;
+        opacity: 0.95;
+        font-family: 'JetBrains Mono', 'Consolas', monospace;
+        letter-spacing: 0.2px;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }}
+
+    /* === Reste du style général === */
+    .block-container {{ padding-top: 1.5rem; padding-bottom: 1rem; }}
+    .stMetric {{ background: #f8f9fa; border-radius: 12px; padding: 14px 18px;
+                border-left: 5px solid #4575b4; }}
+    div[data-testid="stMetricLabel"] > div {{ font-size: 0.75rem;
+                color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; }}
+    div[data-testid="stMetricValue"] {{ font-size: 1.9rem; font-weight: 700; }}
+    h1, h2, h3 {{ color: #1e3a5f; }}
+    .badge-pareto {{ background: #d62728; color: white; padding: 2px 8px;
+                    border-radius: 12px; font-size: 0.8rem; font-weight: 600; }}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -484,25 +598,38 @@ nb_sites_simules = len(sites_pareto_courant) + (1 if site_perso_courant else 0)
 # En-tête
 # ===========================================================================
 
-col_logo, col_titre, col_status = st.columns([1, 5, 2])
-with col_logo:
-    st.markdown("# 🏥")
-with col_titre:
-    st.markdown("## Aide à la décision pour l'aménagement sanitaire")
-    st.markdown("**Béni Mellal-Khénifra** &nbsp;—&nbsp; *Modèle MH3SFCA-λ*",
-                 unsafe_allow_html=True)
-    st.caption(f"dₘₐₓ = {params_courants.d_max:.0f} min  •  "
-                f"β = {params_courants.beta:.1f}  •  "
-                f"α = {params_courants.alpha:.2f}  •  "
-                f"λ_privé = {params_courants.lambda_prive:.2f}  •  "
-                f"λ_public = {params_courants.lambda_public:.2f}")
-with col_status:
-    if nb_sites_simules > 0:
-        st.markdown(f"🔵 **Scénario simulé** ({nb_sites_simules} site(s))")
-    else:
-        st.markdown("🟢 **État initial**")
+# Bandeau d'en-tête vif (gradient SPAI + filigrane thématique + statut)
+if nb_sites_simules > 0:
+    statut_text = (
+        f"🔵 Scénario simulé "
+        f"({nb_sites_simules} site{'s' if nb_sites_simules > 1 else ''})"
+    )
+else:
+    statut_text = "🟢 État initial"
 
-st.divider()
+params_resume = (
+    f"d<sub>max</sub> = {params_courants.d_max:.0f} min &nbsp;•&nbsp; "
+    f"β = {params_courants.beta:.1f} &nbsp;•&nbsp; "
+    f"α = {params_courants.alpha:.2f} &nbsp;•&nbsp; "
+    f"λ<sub>privé</sub> = {params_courants.lambda_prive:.2f} &nbsp;•&nbsp; "
+    f"λ<sub>public</sub> = {params_courants.lambda_public:.2f}"
+)
+
+st.markdown(f"""
+<div class="bandeau-mh3sfca">
+  <div class="bandeau-contenu">
+    <div class="bandeau-titre">
+      <span class="bandeau-icone">🏥</span>
+      <div>
+        <h1>Aide à la décision pour l'aménagement sanitaire</h1>
+        <p class="bandeau-soustitre">Béni Mellal-Khénifra &nbsp;—&nbsp; Modèle MH3SFCA-λ</p>
+      </div>
+    </div>
+    <div class="bandeau-status"><span class="bandeau-badge">{statut_text}</span></div>
+  </div>
+  <div class="bandeau-params">{params_resume}</div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ===========================================================================
