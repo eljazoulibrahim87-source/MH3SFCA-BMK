@@ -10,7 +10,6 @@ Sidebar  : paramètres du modèle + bouton de recalcul.
 
 from __future__ import annotations
 
-import base64
 import io
 import sys
 from pathlib import Path
@@ -133,67 +132,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Motif d'arrière-plan : croix médicale (rouge) + pin de carte (bleu)
-# + ECG (vert) + réseau de connexion (gris). Opacités basses (5–10 %)
-# pour ne pas gêner la lecture.
-_SVG_FOND = """<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'>
-  <g fill='#d73027' fill-opacity='0.07'>
-    <rect x='22' y='10' width='10' height='42' rx='2'/>
-    <rect x='6' y='26' width='42' height='10' rx='2'/>
-  </g>
-  <g transform='translate(118, 12)' fill='#4575b4' fill-opacity='0.08'>
-    <path d='M16 0 C7 0 0 7 0 16 C0 28 16 50 16 50 C16 50 32 28 32 16 C32 7 25 0 16 0 Z'/>
-    <circle cx='16' cy='16' r='6' fill='#ffffff' fill-opacity='1'/>
-  </g>
-  <g stroke='#1a9850' stroke-opacity='0.08' stroke-width='1.5' fill='none' stroke-linejoin='round' stroke-linecap='round'>
-    <path d='M0 110 L34 110 L44 92 L60 132 L76 80 L92 110 L180 110'/>
-  </g>
-  <g stroke='#4575b4' stroke-opacity='0.06' stroke-width='1' stroke-dasharray='3,3' fill='none'>
-    <line x1='25' y1='155' x2='75' y2='155'/>
-    <line x1='95' y1='155' x2='155' y2='155'/>
-  </g>
-  <g fill='#1a9850' fill-opacity='0.12'>
-    <circle cx='25' cy='155' r='2.5'/>
-    <circle cx='75' cy='155' r='2.5'/>
-    <circle cx='95' cy='155' r='2.5'/>
-    <circle cx='155' cy='155' r='2.5'/>
-  </g>
-</svg>"""
-
-_FOND_DATA_URI = (
-    "data:image/svg+xml;base64,"
-    + base64.b64encode(_SVG_FOND.encode("utf-8")).decode("ascii")
-)
-
-CSS = f"""
+CSS = """
 <style>
-    /* Arrière-plan thématique santé + accessibilité spatiale */
-    .stApp {{
-        background-color: #fbfcfd;
-        background-image: url("{_FOND_DATA_URI}");
-        background-attachment: fixed;
-        background-repeat: repeat;
-    }}
-    /* Maintenir la lisibilité du contenu principal */
-    [data-testid="stMainBlockContainer"] {{
-        background-color: rgba(255, 255, 255, 0.78);
-        border-radius: 16px;
-        padding: 18px 24px;
-        box-shadow: 0 1px 12px rgba(30, 58, 95, 0.06);
-    }}
-    /* Sidebar opaque pour ne pas mélanger avec le motif */
-    [data-testid="stSidebar"] > div:first-child {{
-        background-color: rgba(255, 255, 255, 0.96);
-    }}
-    .block-container {{ padding-top: 1.5rem; padding-bottom: 1rem; }}
-    .stMetric {{ background: #f8f9fa; border-radius: 12px; padding: 14px 18px;
-                border-left: 5px solid #4575b4; }}
-    div[data-testid="stMetricLabel"] > div {{ font-size: 0.75rem;
-                color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; }}
-    div[data-testid="stMetricValue"] {{ font-size: 1.9rem; font-weight: 700; }}
-    h1, h2, h3 {{ color: #1e3a5f; }}
-    .badge-pareto {{ background: #d62728; color: white; padding: 2px 8px;
-                    border-radius: 12px; font-size: 0.8rem; font-weight: 600; }}
+    .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
+    .stMetric { background: #f8f9fa; border-radius: 12px; padding: 14px 18px;
+                border-left: 5px solid #4575b4; }
+    div[data-testid="stMetricLabel"] > div { font-size: 0.75rem;
+                color: #6c757d; text-transform: uppercase; letter-spacing: 0.5px; }
+    div[data-testid="stMetricValue"] { font-size: 1.9rem; font-weight: 700; }
+    h1, h2, h3 { color: #1e3a5f; }
+    .badge-pareto { background: #d62728; color: white; padding: 2px 8px;
+                    border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
