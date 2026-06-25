@@ -62,6 +62,64 @@ class ComparaisonScenarios:
 # Construction du dataset enrichi
 # ---------------------------------------------------------------------------
 
+def construire_lignes_pour_site(
+    nom_etab: str,
+    capacite_lits: int,
+    od_par_commune: pd.Series,
+    table_communes: pd.DataFrame,
+    coord_lat: float = np.nan,
+    coord_lon: float = np.nan,
+    type_etab: str = "clinique simulée",
+    circ_sanitaire: str = "",
+) -> pd.DataFrame:
+    """Construit les lignes (commune × site) au format long pour UN site donné.
+
+    Fonction générique réutilisable pour les sites Pareto (avec leur OD dans
+    ``OD_site_candidat_communes.xlsx``) ou pour un site personnalisé fourni
+    par l'utilisateur (avec sa propre matrice OD uploadée).
+
+    Parameters
+    ----------
+    nom_etab : str
+        Nom de l'établissement injecté dans la colonne ``nom_etablissement``.
+    capacite_lits : int
+        Nombre de lits du site simulé (capacité variable par site).
+    od_par_commune : pd.Series
+        Index = nom de commune (format HCP, ex. "C d'Afourar"), valeurs =
+        temps de trajet en minutes.
+    table_communes : pd.DataFrame
+        Centroïdes : sert de pont nom → (code, population).
+    coord_lat, coord_lon : float
+        Coordonnées du site (pour affichage carte ; pas utilisé dans le calcul).
+    type_etab : str
+        Type d'établissement (détermine λ via :func:`_determiner_lambda`).
+    """
+    pont = table_communes.set_index("nom")[["Code_Commu", "Populati_1"]]
+
+    lignes = []
+    for nom_commune, temps in od_par_commune.items():
+        if nom_commune not in pont.index or pd.isna(temps):
+            continue
+        info = pont.loc[nom_commune]
+        lignes.append({
+            "Code géographique": info["Code_Commu"],
+            "Collectivités territoriales": nom_commune,
+            "Population": info["Populati_1"],
+            "type_etablissement": type_etab,
+            "nom_etablissement": nom_etab,
+            "TEMPS_TRAJET_MINUTES": float(temps),
+            "DIST_KM": np.nan,
+            "capacite_lits": int(capacite_lits),
+            "Latitude_Etablissement": coord_lat,
+            "Longitude_Etablissement": coord_lon,
+            "Province_Etablissement": np.nan,
+            "Region_Etablissement": "Beni Mellal-Khenifra",
+            "Milieu_Etablissement": np.nan,
+            "Circ_Sanitaire": circ_sanitaire or nom_etab,
+        })
+    return pd.DataFrame(lignes)
+
+
 def _construire_lignes_simulees(
     od_candidats: pd.DataFrame,
     table_communes: pd.DataFrame,

@@ -10,6 +10,7 @@ Sidebar  : paramètres du modèle + bouton de recalcul.
 
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -47,8 +48,32 @@ from mh3sfca import construire_table_spai, executer_modele, preparer_donnees
 from simulation import (
     LITS_CLINIQUE_SIMULEE,
     SITES_PARETO,
+    construire_lignes_pour_site,
     _construire_lignes_simulees,
 )
+
+# Coordonnées des sites Pareto (utilisé pour l'affichage carte + lignes site)
+COORDS_SITES_PARETO = {
+    "Khenifra":              (32.938293, -5.666568),
+    "Souk Sebt Ouled Nemma": (32.293866, -6.702381),
+    "Demnate":               (31.733306, -7.003886),
+}
+
+
+def generer_template_od(communes_df: pd.DataFrame) -> bytes:
+    """Génère un fichier Excel vierge à remplir avec la matrice OD du site.
+
+    Le fichier contient les 135 communes ordonnées, l'utilisateur n'a qu'à
+    remplir la colonne ``TEMPS_TRAJET_MINUTES``.
+    """
+    template = pd.DataFrame({
+        "Commune": communes_df["nom"].values,
+        "TEMPS_TRAJET_MINUTES": [None] * len(communes_df),
+    })
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        template.to_excel(writer, index=False, sheet_name="OD")
+    return buffer.getvalue()
 
 
 # ===========================================================================
@@ -139,24 +164,61 @@ def charger_tout_en_cache():
 
 
 @st.cache_data(show_spinner="Calcul du modèle MH3SFCA-λ…")
-def calculer_resultats(params_dict: dict, sites_simules: tuple = ()) -> dict:
-    """Recalcule le SPAI pour les paramètres donnés.
+def calculer_resultats(
+    params_dict: dict,
+    sites_pareto_config: tuple = (),
+    site_perso_sig: tuple | None = None,
+    site_perso_od_tuple: tuple | None = None,
+) -> dict:
+    """Recalcule le SPAI pour les paramètres et sites simulés donnés.
 
-    ``params_dict`` (dict hashable pour le cache) → :class:`Parametres`.
-    ``sites_simules`` : tuple des noms de colonnes à injecter (vide = initial).
+    Parameters
+    ----------
+    params_dict : dict
+        Paramètres du modèle (sera converti en :class:`Parametres`).
+    sites_pareto_config : tuple
+        Tuple de tuples ``((site_name, capacity), ...)`` — capacité variable
+        par site Pareto.
+    site_perso_sig : tuple | None
+        Métadonnées du site personnalisé ``(nom, lat, lon, capacite)`` ou None.
+    site_perso_od_tuple : tuple | None
+        Matrice OD du site personnalisé sous forme ``((commune, temps), ...)``.
     """
     params = Parametres(**params_dict)
     df = charger_donnees_pfe()
+    com = charger_communes()
 
-    if sites_simules:
-        # Injecte les sites simulés sélectionnés
+    # --- Sites Pareto (capacités variables) ---
+    if sites_pareto_config:
         od_cand = charger_od_sites_candidats()
-        com = charger_communes()
-        mapping = {site: SITES_PARETO[site]
-                   for site in sites_simules if site in SITES_PARETO}
-        if mapping:
-            lignes = _construire_lignes_simulees(od_cand, com, mapping)
+        for site_name, capacity in sites_pareto_config:
+            if site_name not in SITES_PARETO or site_name not in od_cand.columns:
+                continue
+            od_series = od_cand.set_index("Commune")[site_name]
+            lat, lon = COORDS_SITES_PARETO.get(site_name, (np.nan, np.nan))
+            lignes = construire_lignes_pour_site(
+                nom_etab=SITES_PARETO[site_name],
+                capacite_lits=int(capacity),
+                od_par_commune=od_series,
+                table_communes=com,
+                coord_lat=lat, coord_lon=lon,
+                circ_sanitaire=site_name,
+            )
             df = pd.concat([df, lignes], ignore_index=True)
+
+    # --- Site personnalisé ---
+    if site_perso_sig is not None and site_perso_od_tuple:
+        nom, lat, lon, capacite = site_perso_sig
+        od_series = pd.Series(dict(site_perso_od_tuple))
+        lignes = construire_lignes_pour_site(
+            nom_etab=f"[Perso] {nom}",
+            capacite_lits=int(capacite),
+            od_par_commune=od_series,
+            table_communes=com,
+            coord_lat=float(lat), coord_lon=float(lon),
+            circ_sanitaire=nom,
+        )
+        df = pd.concat([df, lignes], ignore_index=True)
 
     donnees = preparer_donnees(df, params)
     resultats = executer_modele(donnees, params, verbeux=False)
@@ -177,8 +239,12 @@ DATA = charger_tout_en_cache()
 
 if "params" not in st.session_state:
     st.session_state.params = Parametres()
-if "sites_simules" not in st.session_state:
-    st.session_state.sites_simules = ()
+if "sites_pareto_config" not in st.session_state:
+    # {nom_site: capacite_lits} — capacité variable par site
+    st.session_state.sites_pareto_config = {}
+if "site_perso_config" not in st.session_state:
+    # {nom, lat, lon, capacite, od_dict} ou None
+    st.session_state.site_perso_config = None
 
 
 # ===========================================================================
@@ -217,13 +283,145 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### Scénario simulé")
-    sites_choisis = st.multiselect(
-        "Cliniques à ajouter (40 lits chacune)",
-        options=list(SITES_PARETO.keys()),
-        default=list(st.session_state.sites_simules),
-        help="Sélectionne 0, 1, 2 ou 3 sites du front de Pareto à injecter.",
+
+    # ----- Sites Pareto avec capacité variable -----
+    st.markdown("**Sites Pareto-optimaux**")
+    st.caption("Cocher les sites à ajouter et fixer leur capacité (en lits).")
+
+    sites_pareto_actifs: dict[str, int] = {}
+    for site_name in SITES_PARETO.keys():
+        col_chk, col_cap = st.columns([3, 2])
+        with col_chk:
+            actif = st.checkbox(
+                site_name,
+                value=(site_name in st.session_state.sites_pareto_config),
+                key=f"chk_{site_name}",
+            )
+        with col_cap:
+            cap_defaut = st.session_state.sites_pareto_config.get(site_name, 40)
+            cap = st.number_input(
+                "lits", min_value=5, max_value=500, step=5,
+                value=int(cap_defaut),
+                key=f"cap_{site_name}",
+                label_visibility="collapsed",
+                disabled=not actif,
+            )
+            if actif:
+                sites_pareto_actifs[site_name] = int(cap)
+
+    # ----- Site personnalisé -----
+    st.markdown("---")
+    st.markdown("**Site personnalisé**")
+    site_perso_actif = st.checkbox(
+        "Ajouter un autre lieu d'implantation",
+        value=(st.session_state.site_perso_config is not None),
+        key="chk_site_perso",
     )
 
+    site_perso_data = None
+    if site_perso_actif:
+        nom_perso = st.text_input(
+            "Nom du site",
+            value=(st.session_state.site_perso_config or {}).get(
+                "nom", "Nouveau site"),
+            key="nom_perso",
+        )
+        col_lat, col_lon = st.columns(2)
+        with col_lat:
+            lat_perso = st.number_input(
+                "Latitude", min_value=30.0, max_value=35.0,
+                value=float((st.session_state.site_perso_config or {})
+                            .get("lat", 32.5)),
+                step=0.001, format="%.4f", key="lat_perso",
+            )
+        with col_lon:
+            lon_perso = st.number_input(
+                "Longitude", min_value=-10.0, max_value=-4.0,
+                value=float((st.session_state.site_perso_config or {})
+                            .get("lon", -6.5)),
+                step=0.001, format="%.4f", key="lon_perso",
+            )
+        cap_perso = st.number_input(
+            "Capacité (lits)", min_value=5, max_value=500, step=5,
+            value=int((st.session_state.site_perso_config or {})
+                      .get("capacite", 40)),
+            key="cap_perso",
+        )
+
+        st.download_button(
+            "📥 Télécharger le modèle Excel",
+            data=generer_template_od(DATA["communes"]),
+            file_name="modele_OD_site_personnalise.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Le modèle contient les 135 communes — remplir la colonne "
+                 "TEMPS_TRAJET_MINUTES avec le temps en minutes depuis le site.",
+            use_container_width=True,
+        )
+
+        fichier_od = st.file_uploader(
+            "Matrice OD du site (Excel)",
+            type=["xlsx", "xls"],
+            help="Fichier Excel à 2 colonnes : Commune | TEMPS_TRAJET_MINUTES.",
+            key="upload_od_perso",
+        )
+
+        if fichier_od is not None:
+            try:
+                df_od_perso = pd.read_excel(fichier_od)
+                if df_od_perso.shape[1] < 2:
+                    st.error("⚠ Le fichier doit avoir au moins 2 colonnes.")
+                else:
+                    df_od_perso = df_od_perso.iloc[:, :2].copy()
+                    df_od_perso.columns = ["Commune", "TEMPS_TRAJET_MINUTES"]
+                    df_od_perso["Commune"] = df_od_perso["Commune"].astype(str).str.strip()
+                    df_od_perso["TEMPS_TRAJET_MINUTES"] = pd.to_numeric(
+                        df_od_perso["TEMPS_TRAJET_MINUTES"], errors="coerce")
+                    df_od_perso = df_od_perso.dropna(subset=["TEMPS_TRAJET_MINUTES"])
+
+                    noms_attendus = set(DATA["communes"]["nom"].astype(str).str.strip())
+                    noms_fournis = set(df_od_perso["Commune"])
+                    nb_apparies = len(noms_fournis & noms_attendus)
+                    manquants = noms_attendus - noms_fournis
+
+                    if nb_apparies >= 100:
+                        st.success(
+                            f"✓ Fichier validé : **{nb_apparies}** communes appariées."
+                        )
+                        if manquants:
+                            with st.expander(f"⚠ {len(manquants)} commune(s) manquante(s)"):
+                                st.caption(", ".join(sorted(list(manquants))[:30]))
+                        od_filtre = df_od_perso[
+                            df_od_perso["Commune"].isin(noms_attendus)
+                        ]
+                        site_perso_data = {
+                            "nom": nom_perso,
+                            "lat": float(lat_perso),
+                            "lon": float(lon_perso),
+                            "capacite": int(cap_perso),
+                            "od_dict": dict(zip(
+                                od_filtre["Commune"],
+                                od_filtre["TEMPS_TRAJET_MINUTES"].astype(float),
+                            )),
+                        }
+                    else:
+                        st.error(
+                            f"❌ Seulement **{nb_apparies}** communes appariées "
+                            f"(minimum requis : 100). Vérifiez l'orthographe des noms."
+                        )
+            except Exception as e:
+                st.error(f"❌ Erreur lecture du fichier : {e}")
+        else:
+            # Pas de fichier uploadé : on garde la config si elle existe en session
+            if st.session_state.site_perso_config is not None:
+                site_perso_data = {
+                    **st.session_state.site_perso_config,
+                    "nom": nom_perso,
+                    "lat": float(lat_perso),
+                    "lon": float(lon_perso),
+                    "capacite": int(cap_perso),
+                }
+
+    st.divider()
     calculer = st.button("▶ Calculer MH3SFCA-λ", type="primary",
                           use_container_width=True)
 
@@ -233,7 +431,8 @@ with st.sidebar:
             alpha=float(alpha), lambda_prive=float(lambda_prive),
             lambda_public=float(lambda_public),
         )
-        st.session_state.sites_simules = tuple(sites_choisis)
+        st.session_state.sites_pareto_config = sites_pareto_actifs
+        st.session_state.site_perso_config = site_perso_data
         st.toast("Calcul terminé ✓", icon="✅")
 
 
@@ -242,7 +441,8 @@ with st.sidebar:
 # ===========================================================================
 
 params_courants = st.session_state.params
-sites_courants = st.session_state.sites_simules
+sites_pareto_courant = st.session_state.sites_pareto_config or {}
+site_perso_courant = st.session_state.site_perso_config
 
 params_dict = {
     "d_max": params_courants.d_max,
@@ -252,14 +452,32 @@ params_dict = {
     "lambda_public": params_courants.lambda_public,
 }
 
+# Convertit les structures non-hashables en tuples (pour @st.cache_data)
+sites_pareto_tuple = tuple(sorted(sites_pareto_courant.items()))
+perso_sig = None
+perso_od_tuple = None
+if site_perso_courant and site_perso_courant.get("od_dict"):
+    perso_sig = (
+        site_perso_courant["nom"],
+        site_perso_courant["lat"],
+        site_perso_courant["lon"],
+        site_perso_courant["capacite"],
+    )
+    perso_od_tuple = tuple(sorted(site_perso_courant["od_dict"].items()))
+
 # Toujours calculer l'état actuel
-result_courant = calculer_resultats(params_dict, sites_courants)
+result_courant = calculer_resultats(
+    params_dict, sites_pareto_tuple, perso_sig, perso_od_tuple,
+)
 table_courante = result_courant["table_spai"]
 etabs_courants = result_courant["etablissements"]
 
-# Calculer aussi l'état initial (sans sites simulés) pour comparaison
-result_initial = calculer_resultats(params_dict, ())
+# État initial (sans aucune simulation) pour comparaison
+result_initial = calculer_resultats(params_dict, (), None, None)
 table_initial = result_initial["table_spai"]
+
+# Indicateur global : un scénario simulé est-il actif ?
+nb_sites_simules = len(sites_pareto_courant) + (1 if site_perso_courant else 0)
 
 
 # ===========================================================================
@@ -279,8 +497,8 @@ with col_titre:
                 f"λ_privé = {params_courants.lambda_prive:.2f}  •  "
                 f"λ_public = {params_courants.lambda_public:.2f}")
 with col_status:
-    if sites_courants:
-        st.markdown(f"🔵 **Scénario simulé** ({len(sites_courants)} site(s))")
+    if nb_sites_simules > 0:
+        st.markdown(f"🔵 **Scénario simulé** ({nb_sites_simules} site(s))")
     else:
         st.markdown("🟢 **État initial**")
 
@@ -393,22 +611,25 @@ with tab_carte:
 
         # --- Couche établissements ---
         etabs = DATA["etablissements"].copy()
-        # Inclure aussi les sites simulés actifs
-        if sites_courants:
-            for site in sites_courants:
-                from simulation import LITS_CLINIQUE_SIMULEE
-                coords_sim = {
-                    "Khenifra":              (32.938293, -5.666568),
-                    "Souk Sebt Ouled Nemma": (32.293866, -6.702381),
-                    "Demnate":               (31.733306, -7.003886),
-                }
-                lat, lon = coords_sim[site]
-                etabs = pd.concat([etabs, pd.DataFrame([{
-                    "Nom_etablissement": f"[Simulée] {site}",
-                    "Nombre_lits": LITS_CLINIQUE_SIMULEE,
-                    "latitude": lat, "longitude": lon,
-                    "type_etablissement": "clinique simulée",
-                }])], ignore_index=True)
+        # Inclure aussi les sites Pareto sélectionnés (capacité variable)
+        for site_name, cap in sites_pareto_courant.items():
+            lat, lon = COORDS_SITES_PARETO[site_name]
+            etabs = pd.concat([etabs, pd.DataFrame([{
+                "Nom_etablissement": f"[Simulée] {site_name} ({cap} lits)",
+                "Nombre_lits": cap,
+                "latitude": lat, "longitude": lon,
+                "type_etablissement": "clinique simulée",
+            }])], ignore_index=True)
+        # Site personnalisé
+        if site_perso_courant:
+            etabs = pd.concat([etabs, pd.DataFrame([{
+                "Nom_etablissement": f"[Perso] {site_perso_courant['nom']} "
+                                      f"({site_perso_courant['capacite']} lits)",
+                "Nombre_lits": site_perso_courant["capacite"],
+                "latitude": site_perso_courant["lat"],
+                "longitude": site_perso_courant["lon"],
+                "type_etablissement": "clinique simulée",
+            }])], ignore_index=True)
 
         if afficher_etabs != "Aucun":
             filtre = {
@@ -587,16 +808,30 @@ with tab_resultats:
 
 with tab_simulation:
     st.markdown("### Comparaison État initial ↔ Scénario simulé")
-    if not sites_courants:
+    if nb_sites_simules == 0:
         st.info("👉 Sélectionne un ou plusieurs sites dans la sidebar et clique "
                  "**Calculer** pour activer la comparaison.")
     else:
         kpi_i = kpi_synthetiques(table_initial)
         kpi_s = kpi_synthetiques(table_courante)
 
-        st.markdown(f"**Sites injectés** : "
-                     f"{', '.join(sites_courants)}  •  "
-                     f"{len(sites_courants) * LITS_CLINIQUE_SIMULEE} lits ajoutés")
+        # Récapitulatif des sites injectés (capacité variable + site perso)
+        lits_pareto = sum(sites_pareto_courant.values())
+        lits_perso = site_perso_courant["capacite"] if site_perso_courant else 0
+        total_lits = lits_pareto + lits_perso
+
+        descriptions = []
+        for site_name, cap in sites_pareto_courant.items():
+            descriptions.append(f"{site_name} ({cap} lits)")
+        if site_perso_courant:
+            descriptions.append(
+                f"{site_perso_courant['nom']} ({site_perso_courant['capacite']} lits, "
+                f"personnalisé)"
+            )
+        st.markdown(
+            f"**Sites injectés** ({nb_sites_simules}) — **{total_lits} lits ajoutés** :  \n"
+            f"{' • '.join(descriptions)}"
+        )
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:

@@ -15,16 +15,25 @@ import numpy as np
 import pandas as pd
 
 # Bornes pour la classification choroplèthe du SPAI (lits / 1 000 hab.).
-BORNES_CLASSES = [0.0, 1e-9, 0.076, 0.137, 0.250, 0.500, np.inf]
+# Palette et seuils alignés sur la carte QGIS du mémoire (Quantile / Jenks
+# personnalisés), avec une palette RdYlGn ColorBrewer pour la lisibilité.
+BORNES_CLASSES = [0.0, 1e-9, 0.076, 0.188, 0.319, 0.495, float("inf")]
 LIBELLES_CLASSES = [
-    "Désert",
-    "Très faible",
-    "Faible",
-    "Moyen",
-    "Bon",
-    "Très bon",
+    "Désert (SPAI = 0)",
+    "0 – 0.076",
+    "0.076 – 0.188",
+    "0.188 – 0.319",
+    "0.319 – 0.495",
+    "0.495 – 0.707",
 ]
-COULEURS_CLASSES = ["#404040", "#d73027", "#fc8d59", "#fee090", "#91bfdb", "#4575b4"]
+COULEURS_CLASSES = [
+    "#67000d",  # Désert : rouge sombre (équivalent du hatching QGIS)
+    "#e31a1c",  # 0 – 0.076 : rouge vif
+    "#fdae61",  # 0.076 – 0.188 : orange
+    "#ffffbf",  # 0.188 – 0.319 : crème
+    "#a6d96a",  # 0.319 – 0.495 : vert clair
+    "#1a9850",  # 0.495 – 0.707 : vert foncé
+]
 
 
 # ---------------------------------------------------------------------------
